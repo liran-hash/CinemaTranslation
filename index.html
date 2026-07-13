@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Титры</title>
+<style>
+  :root{
+    --bg:#050505;
+    --ink:#f2ede4;
+    --ink-dim:#8a8478;
+    --amber:#c98a4b;
+    --amber-dim:#5c4326;
+    --danger:#a33d2f;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  html,body{
+    height:100%;
+    margin:0;
+    background:var(--bg);
+    color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    overflow:hidden;
+  }
+  body{
+    display:flex;
+    flex-direction:column;
+    justify-content:flex-end;
+    height:100dvh;
+    padding:env(safe-area-inset-top) 20px calc(env(safe-area-inset-bottom) + 14px);
+  }
+
+  /* top status bar */
+  .status{
+    position:fixed;
+    top:calc(env(safe-area-inset-top) + 14px);
+    left:20px;
+    right:20px;
+    display:flex;
+    align-items:center;
+    gap:10px;
+    font-size:13px;
+    letter-spacing:.04em;
+    color:var(--ink-dim);
+    text-transform:uppercase;
+  }
+  .dot{
+    width:8px;height:8px;border-radius:50%;
+    background:var(--ink-dim);
+    flex-shrink:0;
+  }
+  .dot.live{
+    background:var(--amber);
+    animation:breathe 1.8s ease-in-out infinite;
+  }
+  @keyframes breathe{
+    0%,100%{transform:scale(1);opacity:1;}
+    50%{transform:scale(1.5);opacity:.55;}
+  }
+
+  /* subtitle stream */
+  .stream{
+    display:flex;
+    flex-direction:column;
+    gap:10px;
+    padding-bottom:8px;
+    min-height:40vh;
+    justify-content:flex-end;
+  }
+  .line{
+    font-size:26px;
+    line-height:1.35;
+    font-weight:600;
+    opacity:0;
+    transform:translateY(8px);
+    animation:rise .35s ease-out forwards;
+    text-shadow:0 2px 12px rgba(0,0,0,.6);
+  }
+  .line.old{ color:var(--ink-dim); font-weight:500; font-size:20px; }
+  .line.interim{ color:var(--amber); font-style:italic; font-weight:500; font-size:20px; }
+  @keyframes rise{ to{ opacity:1; transform:translateY(0); } }
+
+  /* controls */
+  .controls{
+    margin-top:22px;
+    display:flex;
+    align-items:center;
+    gap:14px;
+  }
+  button{
+    font-family:inherit;
+    border:none;
+    border-radius:999px;
+    padding:16px 28px;
+    font-size:16px;
+    font-weight:600;
+    letter-spacing:.02em;
+    display:flex;
+    align-items:center;
+    gap:10px;
+    cursor:pointer;
+  }
+  #toggle{
+    flex:1;
+    background:var(--amber);
+    color:#1a1208;
+  }
+  #toggle.on{
+    background:var(--danger);
+    color:#fdeeea;
+  }
+  #clear{
+    background:#181818;
+    color:var(--ink-dim);
+    padding:16px 18px;
+  }
+  .hint{
+    margin-top:10px;
+    font-size:12px;
+    color:var(--ink-dim);
+    text-align:center;
+    line-height:1.5;
+  }
+  .hint a{ color:var(--amber); }
+</style>
+</head>
+<body>
+
+  <div class="status">
+    <div class="dot" id="statusDot"></div>
+    <span id="statusText">Остановлено</span>
+  </div>
+
+  <div class="stream" id="stream"></div>
+
+  <div class="controls">
+    <button id="toggle">Начать</button>
+    <button id="clear">Очистить</button>
+  </div>
+  <div class="hint" id="hint">Слушает французский → показывает русский. Держите телефон рядом, разрешите доступ к микрофону.</div>
+  <pre class="hint" id="debug" style="color:#a33d2f; white-space:pre-wrap; text-align:left; font-family:monospace; font-size:11px;"></pre>
+
+<script>
+function debugLog(msg){
+  const d = document.getElementById('debug');
+  if(d) d.textContent += msg + '\n';
+}
+window.onerror = function(msg, src, line, col, err){
+  debugLog('❌ JS error: ' + msg + ' (line ' + line + ')');
+  return false;
+};
+
+const stream = document.getElementById('stream');
+const toggleBtn = document.getElementById('toggle');
+const clearBtn = document.getElementById('clear');
+const statusDot = document.getElementById('statusDot');
+const statusText = document.getElementById('statusText');
+const hint = document.getElementById('hint');
+
+let recognition = null;
+let listening = false;
+let interimEl = null;
+let restartTimer = null;
+
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+debugLog('SpeechRecognition поддерживается: ' + (!!SR));
+debugLog('getUserMedia доступен: ' + !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia));
+debugLog('Контекст: ' + location.protocol + ' isSecureContext=' + window.isSecureContext);
+
+function addFinalLine(text){
+  // demote previous final lines
+  stream.querySelectorAll('.line:not(.interim)').forEach(el => el.classList.add('old'));
+  if(interimEl){ interimEl.remove(); interimEl = null; }
+  const el = document.createElement('div');
+  el.className = 'line';
+  el.textContent = '…';
+  stream.appendChild(el);
+  trimStream();
+  el.scrollIntoView({block:'end'});
+  translateAndShow(text, el);
+}
+
+function setInterim(text){
+  if(!interimEl){
+    interimEl = document.createElement('div');
+    interimEl.className = 'line interim';
+    stream.appendChild(interimEl);
+  }
+  interimEl.textContent = text;
+  trimStream();
+}
+
+function trimStream(){
+  while(stream.children.length > 6){
+    stream.removeChild(stream.firstChild);
+  }
+}
+
+async function translateAndShow(frenchText, el){
+  try{
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 300,
+        messages: [{
+          role: 'user',
+          content: `Translate this French speech to Russian. Respond with ONLY the Russian translation, nothing else, no notes, no quotes:\n\n${frenchText}`
+        }]
+      })
+    });
+    const data = await resp.json();
+    const textBlock = (data.content || []).find(b => b.type === 'text');
+    el.textContent = textBlock ? textBlock.text.trim() : '(нет перевода)';
+  }catch(e){
+    el.textContent = '[ошибка перевода] ' + frenchText;
+  }
+}
+
+function startRecognition(){
+  debugLog('startRecognition() вызван');
+  if(!SR){
+    debugLog('❌ SR не определён, выход');
+    hint.textContent = 'Этот браузер не поддерживает распознавание речи. Попробуйте Chrome на Android.';
+    return;
+  }
+  recognition = new SR();
+  recognition.lang = 'fr-FR';
+  recognition.continuous = true;
+  recognition.interimResults = true;
+
+  recognition.onresult = (event) => {
+    let interim = '';
+    for(let i = event.resultIndex; i < event.results.length; i++){
+      const res = event.results[i];
+      if(res.isFinal){
+        addFinalLine(res[0].transcript.trim());
+      } else {
+        interim += res[0].transcript;
+      }
+    }
+    if(interim.trim()) setInterim(interim.trim());
+  };
+
+  recognition.onstart = () => { debugLog('✓ recognition.onstart сработал — микрофон слушает'); };
+
+  recognition.onerror = (e) => {
+    debugLog('❌ recognition.onerror: ' + e.error);
+    if(e.error === 'not-allowed' || e.error === 'service-not-allowed'){
+      statusText.textContent = 'Нет доступа к микрофону';
+      stopListening();
+    }
+    // other errors: let onend handle restart
+  };
+
+  recognition.onend = () => {
+    debugLog('recognition.onend сработал, listening=' + listening);
+    if(listening){
+      // mobile browsers stop recognition after silence; auto-restart
+      restartTimer = setTimeout(() => { try{ recognition.start(); }catch(e){ debugLog('❌ restart error: ' + e.message); } }, 250);
+    }
+  };
+
+  try{
+    recognition.start();
+    debugLog('recognition.start() вызван без ошибки (ждём onstart)');
+  }catch(e){
+    debugLog('❌ recognition.start() выбросил ошибку: ' + e.message);
+  }
+}
+
+function startListening(){
+  debugLog('startListening() вызван');
+  listening = true;
+  toggleBtn.textContent = 'Остановить';
+  toggleBtn.classList.add('on');
+  statusDot.classList.add('live');
+  statusText.textContent = 'Слушаю…';
+  hint.style.display = 'none';
+  startRecognition();
+  requestWakeLock();
+}
+
+function stopListening(){
+  debugLog('stopListening() вызван');
+  listening = false;
+  clearTimeout(restartTimer);
+  if(recognition){ try{ recognition.stop(); }catch(e){} }
+  toggleBtn.textContent = 'Начать';
+  toggleBtn.classList.remove('on');
+  statusDot.classList.remove('live');
+  statusText.textContent = 'Остановлено';
+}
+
+toggleBtn.addEventListener('click', () => {
+  debugLog('--- клик, listening=' + listening + ' ---');
+  listening ? stopListening() : startListening();
+});
+
+clearBtn.addEventListener('click', () => {
+  stream.innerHTML = '';
+  interimEl = null;
+});
+
+// keep screen awake while listening, if supported
+let wakeLock = null;
+async function requestWakeLock(){
+  try{
+    if('wakeLock' in navigator){
+      wakeLock = await navigator.wakeLock.request('screen');
+      debugLog('✓ wake lock получен');
+    } else {
+      debugLog('wakeLock API недоступен (не критично)');
+    }
+  }catch(e){
+    debugLog('wake lock ошибка (не критично): ' + e.message);
+  }
+}
+document.addEventListener('visibilitychange', () => {
+  if(wakeLock !== null && document.visibilityState === 'visible' && listening){
+    requestWakeLock();
+  }
+});
+</script>
+</body>
+</html>
