@@ -257,25 +257,13 @@ function startRecognition(){
   }
 }
 
-async function startListening(){
+function startListening(){
   listening = true;
   toggleBtn.textContent = 'Остановить';
   toggleBtn.classList.add('on');
   statusDot.classList.add('live');
   statusText.textContent = 'Слушаю…';
   hint.style.display = 'none';
-  try{
-    // request mic with suppression off — theater sound is distant, not a voice call
-    await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: false,
-        noiseSuppression: false,
-        autoGainControl: true
-      }
-    });
-  }catch(e){
-    debugLog('⚠️ не удалось задать параметры микрофона: ' + e.message);
-  }
   startRecognition();
   requestWakeLock();
 }
