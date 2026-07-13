@@ -30,6 +30,7 @@
     padding:env(safe-area-inset-top) 20px calc(env(safe-area-inset-bottom) + 14px);
   }
 
+  /* top status bar */
   .status{
     position:fixed;
     top:calc(env(safe-area-inset-top) + 14px);
@@ -57,6 +58,7 @@
     50%{transform:scale(1.5);opacity:.55;}
   }
 
+  /* subtitle stream */
   .stream{
     display:flex;
     flex-direction:column;
@@ -78,6 +80,7 @@
   .line.interim{ color:var(--amber); font-style:italic; font-weight:500; font-size:20px; }
   @keyframes rise{ to{ opacity:1; transform:translateY(0); } }
 
+  /* controls */
   .controls{
     margin-top:22px;
     display:flex;
@@ -162,6 +165,7 @@ let restartTimer = null;
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 
 function addFinalLine(text){
+  // demote previous final lines
   stream.querySelectorAll('.line:not(.interim)').forEach(el => el.classList.add('old'));
   if(interimEl){ interimEl.remove(); interimEl = null; }
   const el = document.createElement('div');
@@ -236,6 +240,7 @@ function startRecognition(){
 
   recognition.onend = () => {
     if(listening){
+      // mobile browsers stop recognition after silence; auto-restart
       restartTimer = setTimeout(() => { try{ recognition.start(); }catch(e){} }, 250);
     }
   };
@@ -247,13 +252,25 @@ function startRecognition(){
   }
 }
 
-function startListening(){
+async function startListening(){
   listening = true;
   toggleBtn.textContent = 'Остановить';
   toggleBtn.classList.add('on');
   statusDot.classList.add('live');
   statusText.textContent = 'Слушаю…';
   hint.style.display = 'none';
+  try{
+    // request mic with suppression off — theater sound is distant, not a voice call
+    await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: true
+      }
+    });
+  }catch(e){
+    debugLog('⚠️ не удалось задать параметры микрофона: ' + e.message);
+  }
   startRecognition();
   requestWakeLock();
 }
@@ -277,6 +294,7 @@ clearBtn.addEventListener('click', () => {
   interimEl = null;
 });
 
+// keep screen awake while listening, if supported
 let wakeLock = null;
 async function requestWakeLock(){
   try{
