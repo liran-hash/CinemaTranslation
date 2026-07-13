@@ -194,11 +194,16 @@ function trimStream(){
 }
 
 async function translateAndShow(frenchText, el){
+  debugLog('→ перевод: "' + frenchText + '"');
   try{
     const url = 'https://api.mymemory.translated.net/get?q=' + encodeURIComponent(frenchText) + '&langpair=fr|ru';
     const resp = await fetch(url);
-    const data = await resp.json();
+    debugLog('  fetch статус: ' + resp.status);
+    const raw = await resp.text();
+    debugLog('  сырой ответ: ' + raw.slice(0, 200));
+    const data = JSON.parse(raw);
     const translated = data && data.responseData && data.responseData.translatedText;
+    debugLog('  переведено: ' + translated);
     el.textContent = translated ? translated : '(нет перевода)';
   }catch(e){
     debugLog('❌ ошибка перевода: ' + e.message);
